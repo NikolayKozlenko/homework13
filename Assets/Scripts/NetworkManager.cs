@@ -24,7 +24,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks
     // Если нет доступных комнат — создаём новую
     public override void OnJoinRandomFailed(short returnCode, string message)
     {
-        PhotonNetwork.CreateRoom(null, new RoomOptions { MaxPlayers = 4 });
+        PhotonNetwork.CreateRoom(null, new RoomOptions { MaxPlayers = 2 });
     }
 
     // При успешном подключении к комнате
@@ -35,7 +35,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks
     }
 
     // Спавн игрока
-    private void SpawnPlayer()
+    public void SpawnPlayer()
     {
         PhotonNetwork.Instantiate("Player", Vector3.zero, Quaternion.identity);
     }
