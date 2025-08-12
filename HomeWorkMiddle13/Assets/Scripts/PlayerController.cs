@@ -8,11 +8,12 @@ public class PlayerController : MonoBehaviourPun, IPunObservable
     [Header("Movement Settings")]
     [SerializeField] private float moveSpeed = 8f;
     [SerializeField] private float rotationSpeed = 12f;
-    [SerializeField] private ForceMode forceMode = ForceMode.VelocityChange;
+    [SerializeField] private float syncSmoothing = 10f;
+    [SerializeField] private float positionSnapThreshold = 5f;
 
-    [Header("Ground Check")]
-    [SerializeField] private LayerMask groundLayer;
-    [SerializeField] private float groundCheckDistance = 0.2f;
+    [Header("Ground Settings")]
+    [SerializeField] private LayerMask groundLayers = 1;
+    [SerializeField] private float groundCheckRadius = 0.2f;
     [SerializeField] private float groundStickForce = 5f;
 
     private Rigidbody rb;
@@ -20,26 +21,31 @@ public class PlayerController : MonoBehaviourPun, IPunObservable
     private Vector3 networkPosition;
     private Quaternion networkRotation;
     private Vector3 networkVelocity;
+    private float lastNetworkTime;
+    private bool receivedValidData;
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
         rb.freezeRotation = true;
-
-        // Отключаем ненужные компоненты для чужих игроков
-        if (!photonView.IsMine)
-        {
-            Destroy(GetComponentInChildren<Camera>()?.gameObject);
-            Destroy(GetComponentInChildren<AudioListener>()?.gameObject);
-        }
+        rb.maxAngularVelocity = 7f;
     }
 
     private void Update()
     {
         if (!photonView.IsMine) return;
 
-        GroundCheck();
+        CheckGrounded();
         HandleRotation();
+    }
+
+    [PunRPC]
+    public void NetworkDestroyPlayer()
+    {
+        if (photonView.IsMine)
+        {
+            PhotonNetwork.Destroy(gameObject);
+        }
     }
 
     private void FixedUpdate()
@@ -48,41 +54,37 @@ public class PlayerController : MonoBehaviourPun, IPunObservable
         {
             HandleMovement();
         }
-        else
+        else if (receivedValidData)
         {
-            // Плавная интерполяция для удаленных игроков
-            rb.position = Vector3.Lerp(rb.position, networkPosition, Time.deltaTime * 10f);
-            rb.rotation = Quaternion.Lerp(rb.rotation, networkRotation, Time.deltaTime * 10f);
-            rb.velocity = networkVelocity;
+            SyncRemotePlayer();
         }
     }
 
-    private void GroundCheck()
+    private void CheckGrounded()
     {
-        isGrounded = Physics.Raycast(
+        isGrounded = Physics.CheckSphere(
             transform.position + Vector3.up * 0.1f,
-            Vector3.down,
-            groundCheckDistance + 0.1f,
-            groundLayer
+            groundCheckRadius,
+            groundLayers,
+            QueryTriggerInteraction.Ignore
         );
     }
 
     private void HandleMovement()
     {
-        float horizontal = Input.GetAxis("Horizontal");
-        float vertical = Input.GetAxis("Vertical");
+        Vector3 input = new Vector3(
+            Input.GetAxis("Horizontal"),
+            0,
+            Input.GetAxis("Vertical")
+        ).normalized;
 
-        Vector3 direction = new Vector3(horizontal, 0, vertical).normalized;
-        Vector3 targetVelocity = direction * moveSpeed;
-
-        // Плавное изменение скорости
+        Vector3 targetVelocity = input * moveSpeed;
         rb.velocity = Vector3.Lerp(
             rb.velocity,
             new Vector3(targetVelocity.x, rb.velocity.y, targetVelocity.z),
             Time.fixedDeltaTime * 10f
         );
 
-        // Прижимаем к земле для стабильности
         if (isGrounded && rb.velocity.y < 0.1f)
         {
             rb.AddForce(Vector3.down * groundStickForce, ForceMode.Force);
@@ -91,37 +93,51 @@ public class PlayerController : MonoBehaviourPun, IPunObservable
 
     private void HandleRotation()
     {
-        if (new Vector3(rb.velocity.x, 0, rb.velocity.z).magnitude > 0.1f)
+        Vector3 flatVelocity = new Vector3(rb.velocity.x, 0, rb.velocity.z);
+        if (flatVelocity.magnitude > 0.1f)
         {
-            Quaternion targetRotation = Quaternion.LookRotation(
-                new Vector3(rb.velocity.x, 0, rb.velocity.z)
-            );
-
             transform.rotation = Quaternion.Slerp(
                 transform.rotation,
-                targetRotation,
+                Quaternion.LookRotation(flatVelocity),
                 Time.deltaTime * rotationSpeed
             );
         }
+    }
+
+    private void SyncRemotePlayer()
+    {
+        float distance = Vector3.Distance(rb.position, networkPosition);
+
+        if (distance > positionSnapThreshold)
+        {
+            rb.position = networkPosition;
+            rb.rotation = networkRotation;
+            return;
+        }
+
+        rb.position = Vector3.Lerp(rb.position, networkPosition, Time.deltaTime * syncSmoothing);
+        rb.rotation = Quaternion.Slerp(rb.rotation, networkRotation, Time.deltaTime * (syncSmoothing * 0.5f));
+        rb.velocity = networkVelocity;
     }
 
     public void OnPhotonSerializeView(PhotonStream stream, PhotonMessageInfo info)
     {
         if (stream.IsWriting)
         {
-            // Отправляем свои данные
-            stream.SendNext(rb.position);
-            stream.SendNext(rb.rotation);
+            stream.SendNext(transform.position);
+            stream.SendNext(transform.rotation);
             stream.SendNext(rb.velocity);
+            stream.SendNext(isGrounded);
         }
         else
         {
-            // Получаем данные других игроков
             networkPosition = (Vector3)stream.ReceiveNext();
             networkRotation = (Quaternion)stream.ReceiveNext();
             networkVelocity = (Vector3)stream.ReceiveNext();
+            isGrounded = (bool)stream.ReceiveNext();
+            lastNetworkTime = Time.time;
+            receivedValidData = true;
 
-            // Коррекция задержки (опционально)
             float lag = Mathf.Abs((float)(PhotonNetwork.Time - info.SentServerTime));
             networkPosition += networkVelocity * lag;
         }
@@ -129,7 +145,7 @@ public class PlayerController : MonoBehaviourPun, IPunObservable
 
     private void OnDrawGizmosSelected()
     {
-        Gizmos.color = Color.green;
-        Gizmos.DrawLine(transform.position, transform.position + Vector3.down * (groundCheckDistance + 0.1f));
+        Gizmos.color = isGrounded ? Color.green : Color.red;
+        Gizmos.DrawWireSphere(transform.position + Vector3.up * 0.1f, groundCheckRadius);
     }
 }

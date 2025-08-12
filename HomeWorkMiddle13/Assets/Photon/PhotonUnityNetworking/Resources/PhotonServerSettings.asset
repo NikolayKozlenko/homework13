@@ -39,6 +39,22 @@ MonoBehaviour:
   - DestroySpaceship
   - Fire
   - RespawnSpaceship
+  - DestroyPlayer
+  - FireBullet
+  - NetworkDestroyPlayer
+  - FireBulletRPC
+  - SyncBulletVelocity
+  - TakeDamageRPC
+  - CollectItemRPC
+  - RespawnItemRPC
+  - RespawnItem
+  - DieRPC
+  - PlayerDiedRPC
+  - Die
+  - RespawnPlayer
+  - OnHealthUpdated
+  - OnAmmoUpdated
+  - OnCoinsUpdated
   DisableAutoOpenWizard: 1
   ShowSettings: 0
   DevRegionSetOnce: 1
